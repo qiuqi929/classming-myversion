@@ -22,6 +22,17 @@ public class Main {
     private static final String LOG_PREVIOUS = " **** Executed Line: **** ";
     public static final String MAIN_SIGN = "void main(java.lang.String[])";
     private static final String LIMITED_STMT = ":= @";
+    private static String extraCp = "";
+    private static boolean usedJunit = false;
+    private static String junitCmd = ""; // java -cp .;source/class/path;path/junit.jar;path/hamcrest-jar org.junit.runner.JUnitCore [TestClass]
+    private static String junitPath, hamcrestPath, testClassName, toolsJarPath = "";
+
+    public static boolean forceResolveFailed = false;
+
+
+    public static void switchJunit() {
+        usedJunit = !usedJunit;
+    }
 
     public static String getGenerated() {
         return generated;
@@ -29,6 +40,10 @@ public class Main {
 
     public static void setGenerated(String generated) {
         Main.generated = generated;
+    }
+
+    public static void setExtraCp(String extraCp) {
+        Main.extraCp = extraCp;
     }
 
     public static String getDependencies() {
@@ -59,6 +74,7 @@ public class Main {
             streamOut.close();
             return fileName;
         } catch (Exception e) {
+//            e.printStackTrace();
             System.out.println("should not");
             return null;
         }
@@ -181,9 +197,18 @@ public class Main {
         pathes.add(generated);
 //        pathes.add(target);
 //        Options.v().parse(args);
-        String[] dependencyArr = dependencies.split("[;]");
+        String[] dependencyArr = dependencies.split(File.pathSeparator);
         for(String d: dependencyArr){
             pathes.add(d);
+        }
+        if(!extraCp.equals("")){
+            for(String s: extraCp.substring(1).split(File.pathSeparator)){
+                pathes.add(s);
+            }
+        }
+        if(usedJunit){
+            pathes.add(junitPath);
+            pathes.add(hamcrestPath);
         }
         Options.v().set_soot_classpath(generateClassPath(pathes));
         Scene.v().loadNecessaryClasses();
@@ -196,9 +221,14 @@ public class Main {
         }
     }
 
-    public static Set<String> getExecutedLiveInstructions(String className, String signature, String[] args) throws IOException {
+    public static Set<String> getExecutedLiveInstructions(String className, String signature, String[] args, String jvmOptions) throws IOException {
         Set<String> usedStmt = new HashSet<>();
-        String cmd = "java -Xbootclasspath/a:" + dependencies + " -classpath " + generated + " " + className;
+        String cmd;
+        if (usedJunit) {
+            cmd = generateJunitCmd(jvmOptions);
+        }else{
+            cmd = "java -Xbootclasspath/a:" + dependencies + " -classpath " + generated + extraCp + " " + jvmOptions + " " + className;
+        }
         if (args != null && args.length != 0) {
             for (String arg: args) {
                 cmd += " " + arg + " ";
@@ -222,6 +252,7 @@ public class Main {
                 }
                 finally{
                     try {
+                        br2.close();
                         is2.close();
                     } catch (IOException e) {
                         e.printStackTrace();
@@ -236,7 +267,7 @@ public class Main {
                 while ((line1 = br1.readLine()) != null) {
 //                    allLines += line1 + "\n";
 //                    noOutput = false;
-//                        System.out.println(line1);
+//                    System.out.println(line1);
                     if (line1.contains(LOG_PREVIOUS) && line1.contains(signature)) {
                         String[] elements = line1.split("[*]+");
                         String currentStmt = elements[3].trim();
@@ -250,6 +281,7 @@ public class Main {
                     e.printStackTrace();
             } finally{
                 try {
+                    br1.close();
                     is1.close();
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -267,10 +299,40 @@ public class Main {
         return usedStmt;
     }
 
-    public static List<String> getPureMainInstructionsFlow(String className, String[] args) throws IOException {
+    public static String setJunitCommand(String junitPath, String hamcrestPath, String testClassPath, String jvmOptions) {
+        if (!usedJunit) {
+            switchJunit();
+        }
+        junitCmd = "java -Xbootclasspath/a:" + dependencies + " -classpath .;" + junitPath + ";" + hamcrestPath + ";" + generated +  " " + jvmOptions + " org.junit.runner.JUnitCore " + extraCp  + testClassPath;
+        return junitCmd;
+    }
+
+    public static void useJunit(String junitPath, String hamcrestPath, String toolsJarPath, String testClassName){
+        if (!usedJunit)
+            switchJunit();
+        Main.junitPath = junitPath;
+        Main.hamcrestPath = hamcrestPath;
+        Main.testClassName = testClassName;
+        Main.toolsJarPath = toolsJarPath;
+    }
+
+    public static String generateJunitCmd(String jvmOptions){
+        String cmd = "java -Xbootclasspath/a:" + dependencies + " -classpath " + generated + extraCp
+                + File.pathSeparator + junitPath + File.pathSeparator + hamcrestPath + File.pathSeparator + toolsJarPath
+                + " " + jvmOptions + " org.junit.runner.JUnitCore " + testClassName;
+        return cmd;
+    }
+
+
+    public static List<String> getPureMainInstructionsFlow(String className, String[] args, String jvmOptions) throws IOException {
         Set<String> usedStmt = new HashSet<>();
         List<String> result = new ArrayList<>();
-        String cmd = "java -Xbootclasspath/a:" + dependencies + " -classpath " + generated + " " + className;
+        String cmd;
+        if (usedJunit) {
+            cmd = generateJunitCmd(jvmOptions);
+        }else{
+            cmd = "java -Xbootclasspath/a:" + dependencies + " -classpath " + generated + extraCp + " " + jvmOptions + " " + className;
+        }
         if (args != null && args.length != 0) {
             for (String arg: args) {
                 cmd += " " + arg + " ";
@@ -293,6 +355,7 @@ public class Main {
                 }
                 finally{
                     try {
+                        br2.close();
                         is2.close();
                     } catch (IOException e) {
                         e.printStackTrace();
@@ -314,6 +377,7 @@ public class Main {
                 e.printStackTrace();
             } finally {
                 try {
+                    br1.close();
                     is1.close();
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -328,22 +392,41 @@ public class Main {
         return result;
     }
 
-    public static List<SootMethod> getLiveMethod(Set<String> usedStmt, List<SootMethod> methods) {
+
+
+    public static List<SootMethod> getLiveMethod(Set<String> usedStmt, List<String> pureInstructionFlow, List<SootMethod> methods) {
         List<SootMethod> signatures = new ArrayList<>();
         Set<String> involvedMethod = new HashSet<>();
-        Pattern invokePattern = Pattern.compile("[<][^:]+[:]\\s+[^>]+[>]");
-        for (String stmt : usedStmt) {
-            if (!stmt.contains(LOG_PREVIOUS) && stmt.contains("invoke")) {
-                Matcher matcher = invokePattern.matcher(stmt);
+        if (usedJunit) {
+            Pattern pattern = Pattern.compile("[<](.*)[>]", Pattern.DOTALL);
+            for (String instruction: pureInstructionFlow) {
+                String[] elements = instruction.split("[*]+");
+                String singleElement = elements[0];
+                Matcher matcher = pattern.matcher(singleElement);
                 if (matcher.find()) {
-                    String methodName = matcher.group();
-                    involvedMethod.add(methodName);
+                    involvedMethod.add(matcher.group());
                 }
             }
-        }
-        for (SootMethod method : methods) {
-            if (involvedMethod.contains(method.getSignature()) || method.getSignature().contains(MAIN_SIGN)) {
-                signatures.add(method);
+            for (SootMethod method : methods) {
+                if (involvedMethod.contains(method.getSignature())) {
+                    signatures.add(method);
+                }
+            }
+        } else {
+            Pattern invokePattern = Pattern.compile("[<][^:]+[:]\\s+[^>]+[>]");
+            for (String stmt : usedStmt) {
+                if (!stmt.contains(LOG_PREVIOUS) && stmt.contains("invoke")) {
+                    Matcher matcher = invokePattern.matcher(stmt);
+                    if (matcher.find()) {
+                        String methodName = matcher.group();
+                        involvedMethod.add(methodName);
+                    }
+                }
+            }
+            for (SootMethod method : methods) {
+                if (involvedMethod.contains(method.getSignature()) || method.getSignature().contains(MAIN_SIGN)) {
+                    signatures.add(method);
+                }
             }
         }
         return signatures;
@@ -357,6 +440,41 @@ public class Main {
         SootMethod mainMethod = null;
         for (SootMethod method : d) {
             method.retrieveActiveBody();
+            String currentSignature = method.getSignature();
+            if (currentSignature.contains(signature)) {
+                mainMethod = method;
+                break;
+            }
+        }
+        if (mainMethod == null) {
+            return null;
+        }
+        Body body = mainMethod.retrieveActiveBody();
+        UnitPatchingChain units = body.getUnits();
+        Iterator<Unit> iter = units.snapshotIterator();
+        Map<String, String> mapping = new HashMap<>();
+        while (iter.hasNext()) {
+            Stmt current = (Stmt)iter.next();
+            if (current.toString().contains(LOG_PREVIOUS)) { // because soot will rename variable
+                String[] elements = current.toString().split("[*]+");
+                String currentStmt = elements[3].trim().replace("\\", "");  // replace escape character
+                currentStmt = currentStmt.substring(0, currentStmt.length() - 2);
+                if (usedStmt.contains(currentStmt)) {
+                    Stmt previous = (Stmt) (units.getPredOf(current));
+                    mapping.put(previous.toString(), currentStmt);
+                    activeJimpleInstructions.add(previous);
+                }
+            }
+        }
+        UsedStatementHelper.addMethodStringToStmt(signature, mapping);
+        return activeJimpleInstructions;
+    }
+
+    public static List<Stmt> getActiveInstructions(Set<String> usedStmt, SootClass c, String signature, String[] args) throws IOException {
+        List<Stmt> activeJimpleInstructions = new ArrayList<>();
+        List<SootMethod> d = c.getMethods();
+        SootMethod mainMethod = null;
+        for (SootMethod method : d) {
             String currentSignature = method.getSignature();
             if (currentSignature.contains(signature)) {
                 mainMethod = method;
@@ -403,7 +521,34 @@ public class Main {
     }
 
     public static SootClass loadTargetClass(String className) {
-        SootClass c = Scene.v().forceResolve(className, SootClass.BODIES);
+        SootClass c = null;
+//        boolean retry = false;
+//        int tryTimes = 0;
+//        do{
+//            try {
+//                tryTimes++;
+                c = Scene.v().forceResolve(className, SootClass.BODIES);
+//                retry = false;
+//            }catch (ArrayIndexOutOfBoundsException e){
+//                System.out.println("Scene.v().forceResolve() Failed!!!");
+//                System.out.println("Times Tried: " + tryTimes);
+//                retry = true;
+//                if(tryTimes > 5){
+//                    // recover the original file
+//                    retry = false;
+//                    File originalFile = new File(generated+className.replace(".", File.separator)+"-original.class");
+//                    File currentFile = new File(generated+className.replace(".", File.separator)+".class");
+//                    currentFile.delete();
+//                    try {
+//                        Files.copy(originalFile.toPath(), currentFile.toPath());
+//                    }catch (Exception ex){
+//                        ex.printStackTrace();
+//                    }
+//                    c = Scene.v().forceResolve(className, SootClass.BODIES);
+//                    forceResolveFailed = true;
+//                }
+//            }
+//        }while(retry);
 //        c.setResolvingLevel(0);
         List<SootMethod> d = c.getMethods();
         for (SootMethod method : d) {
@@ -418,13 +563,24 @@ public class Main {
     }
 
     public static void main(String[] args) throws IOException {
+//        G.reset();
+//        Main.setGenerated("./sootOutput/ant/ant-launcher/");
+//        Main.initial(args);
+//        SootClass newClass = Main.loadTargetClass("org.apache.tools.ant.launch.Launcher");
+//        Main.outputClassFile(newClass);
+
+
+        Main.setGenerated("./sootOutput/apache-maven-3.6.3/boot/plexus-classworlds-2.6.0/");
         initial(args);
-        SootClass c = Scene.v().forceResolve("com.classming.Hello", SootClass.BODIES);
+        SootClass c = Scene.v().forceResolve("org.codehaus.plexus.classworlds.launcher.Launcher", SootClass.BODIES);
         List<SootMethod> d = c.getMethods();
         for (SootMethod method: d) {
             method.retrieveActiveBody();
         }
-        SootMethod test = d.get(2);
+        SootMethod test = d.get(18);
+        for(Unit u:d.get(18).getActiveBody().getUnits()){
+            System.out.println(u.toString());
+        }
         Body body = test.getActiveBody();
         UnitPatchingChain units = body.getUnits();
 
